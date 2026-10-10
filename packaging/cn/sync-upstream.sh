@@ -74,18 +74,26 @@ git branch -f "$SCRATCH" "$CN"
 git checkout --quiet "$SCRATCH"
 
 if ! git merge --no-edit "$UP"; then
-  conflicted="$(git diff --name-only --diff-filter=U | tr '\n' ' ')"
   # Only the version line is safe to settle alone: upstream moved 0.5.0 -> 0.5.1, ours reads
   # 0.5.0-cn.3. Take upstream's files — cn edits nothing in them besides versions, proven above —
   # and let `xtask version set` put the CN suffix back on and refresh the lock. Any other
-  # conflict needs a human.
-  case "$conflicted" in
-    "Cargo.toml Cargo.lock " | "Cargo.toml " | "Cargo.lock ")
-      for f in $conflicted; do git checkout --theirs -- "$f" && git add "$f"; done
-      git commit --no-edit --quiet
-      ;;
-    *) git merge --abort; die "merge conflicts in: $conflicted" ;;
-  esac
+  # conflict needs a human. (git lists the paths alphabetically, so test them one by one rather
+  # than matching the whole string.)
+  unresolved=""
+  for f in $(git diff --name-only --diff-filter=U); do
+    case " Cargo.toml Cargo.lock " in
+      *" $f "*) ;;
+      *) unresolved="$unresolved $f" ;;
+    esac
+  done
+  if [ -n "$unresolved" ]; then
+    git merge --abort
+    die "merge conflicts in:$unresolved"
+  fi
+  for f in $(git diff --name-only --diff-filter=U); do
+    git checkout --theirs -- "$f" && git add "$f"
+  done
+  git commit --no-edit --quiet
 fi
 
 BASE="$(base_of "$UP")"
