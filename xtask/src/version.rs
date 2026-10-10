@@ -25,8 +25,6 @@ pub fn replace(manifest: &str, new: &str) -> Result<String, String> {
     validate(new)?;
     let (idx, _) = find_line(manifest)?;
     let old = read(manifest)?;
-    let pin = format!("version = \"{old}\"");
-    let want = format!("version = \"{new}\"");
     let mut out = String::with_capacity(manifest.len() + 8);
     let mut in_deps = false;
     for (i, line) in manifest.split_inclusive('\n').enumerate() {
@@ -45,12 +43,28 @@ pub fn replace(manifest: &str, new: &str) -> Result<String, String> {
         if t.starts_with('[') {
             in_deps = t == "[workspace.dependencies]";
         } else if in_deps && t.contains("path = ") {
-            out.push_str(&line.replacen(&pin, &want, 1));
+            out.push_str(&repin(line, new));
             continue;
         }
         out.push_str(line);
     }
     Ok(out)
+}
+
+/// One `[workspace.dependencies]` line with its `version = "…"` set to `new`, path untouched.
+///
+/// Upstream never has to move these pins — a plain release satisfies the pin of the release before
+/// it — so a synced upstream release leaves them behind the workspace version. Ours is a
+/// pre-release, which no older pin accepts, so whatever the pin said, it follows the new version.
+fn repin(line: &str, new: &str) -> String {
+    let Some(start) = line.find("version = \"") else {
+        return line.to_string();
+    };
+    let tail = &line[start + "version = \"".len()..];
+    let Some(end) = tail.find('"') else {
+        return line.to_string();
+    };
+    format!("{}version = \"{new}\"{}", &line[..start], &tail[end + 1..])
 }
 
 /// Semver without build metadata: `MAJOR.MINOR.PATCH` plus an optional `-pre.release` tag.
@@ -154,6 +168,15 @@ mod tests {
         let m = "[workspace.package]\nversion = \"0.1.0\"\n\n[workspace.dependencies]\nin = { path = \"crates/in\", version = \"0.1.0\" }\nout = { version = \"0.1.0\" }\n\n[dependencies]\nother = { path = \"x\", version = \"0.1.0\" }\n";
         let want = "[workspace.package]\nversion = \"0.1.0-rc.1\"\n\n[workspace.dependencies]\nin = { path = \"crates/in\", version = \"0.1.0-rc.1\" }\nout = { version = \"0.1.0\" }\n\n[dependencies]\nother = { path = \"x\", version = \"0.1.0\" }\n";
         assert_eq!(replace(m, "0.1.0-rc.1").unwrap(), want);
+    }
+
+    /// The state a synced upstream release leaves behind: upstream moves only `[workspace.package]`,
+    /// so the pins sit one version back — and a pre-release of the new version satisfies none of them.
+    #[test]
+    fn moves_internal_pins_that_lag_the_workspace() {
+        let m = "[workspace.package]\nversion = \"0.5.1\"\n\n[workspace.dependencies]\nin = { path = \"crates/in\", version = \"0.5.0\" }\nout = { version = \"0.5.0\" }\n";
+        let want = "[workspace.package]\nversion = \"0.5.1-cn.1\"\n\n[workspace.dependencies]\nin = { path = \"crates/in\", version = \"0.5.1-cn.1\" }\nout = { version = \"0.5.0\" }\n";
+        assert_eq!(replace(m, "0.5.1-cn.1").unwrap(), want);
     }
 
     #[test]
