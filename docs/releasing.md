@@ -102,6 +102,20 @@ Without certificates (locally) the script signs ad-hoc and skips notarization:
 packaging/macos/package.sh --arch aarch64     # quicker, host-only; --arch universal needs both targets
 ```
 
+A Mac that already holds a *Developer ID Application* identity makes release-quality artifacts
+without the app-specific password ever entering the environment. Store it once with
+`xcrun notarytool store-credentials`, then name that profile:
+
+```sh
+MACOS_SIGN_IDENTITY="Developer ID Application: … (TEAMID)" \
+NOTARY_KEYCHAIN_PROFILE=<profile-name> \
+packaging/macos/package.sh --arch universal
+```
+
+`APPLE_ID`, `APPLE_PASSWORD` and `APPLE_TEAM_ID` are the alternative, and what CI uses; the
+keychain profile wins when both are set. Either way a profile or secret only counts once a command
+that uses it has actually succeeded on the machine running it.
+
 ### Windows
 
 `packaging/windows/package.ps1 -Arch x64|x86|arm64` builds with `-C target-feature=+crt-static`, so
