@@ -1,7 +1,8 @@
 //! `cargo xtask version [set X.Y.Z[-pre]]`: the workspace version, the single source of truth.
 //!
 //! The version lives in `[workspace.package] version` in the root `Cargo.toml`; every crate
-//! inherits it with `version.workspace = true`, and the packaging scripts read it from here.
+//! inherits it with `version.workspace = true`, and the packaging scripts read it from here. The
+//! internal crates are pinned in `[workspace.dependencies]`, and `set` moves those pins with it.
 
 use std::path::Path;
 
@@ -16,10 +17,18 @@ pub fn read(manifest: &str) -> Result<String, String> {
 }
 
 /// `manifest` with the workspace version replaced; everything else is byte-for-byte unchanged.
+///
+/// The internal crates are pinned in `[workspace.dependencies]` with an explicit `version`, and a
+/// pre-release does not satisfy the previous pin (`0.3.0-rc.1` is below `^0.3.0`), so cargo cannot
+/// resolve the workspace with only `[workspace.package]` moved. Those pins travel with it.
 pub fn replace(manifest: &str, new: &str) -> Result<String, String> {
     validate(new)?;
     let (idx, _) = find_line(manifest)?;
+    let old = read(manifest)?;
+    let pin = format!("version = \"{old}\"");
+    let want = format!("version = \"{new}\"");
     let mut out = String::with_capacity(manifest.len() + 8);
+    let mut in_deps = false;
     for (i, line) in manifest.split_inclusive('\n').enumerate() {
         if i == idx {
             let eol = if line.ends_with("\r\n") {
@@ -30,9 +39,16 @@ pub fn replace(manifest: &str, new: &str) -> Result<String, String> {
                 ""
             };
             out.push_str(&format!("version = \"{new}\"{eol}"));
-        } else {
-            out.push_str(line);
+            continue;
         }
+        let t = line.trim();
+        if t.starts_with('[') {
+            in_deps = t == "[workspace.dependencies]";
+        } else if in_deps && t.contains("path = ") {
+            out.push_str(&line.replacen(&pin, &want, 1));
+            continue;
+        }
+        out.push_str(line);
     }
     Ok(out)
 }
@@ -131,6 +147,15 @@ mod tests {
         assert!(out.contains("foo = { version = \"1\" }"));
     }
 
+    /// A pre-release is below the previous pin, so `^0.1.0` does not match `0.1.0-rc.1` and cargo
+    /// fails to resolve the workspace unless the internal pins move with `[workspace.package]`.
+    #[test]
+    fn moves_the_internal_pins_with_the_version() {
+        let m = "[workspace.package]\nversion = \"0.1.0\"\n\n[workspace.dependencies]\nin = { path = \"crates/in\", version = \"0.1.0\" }\nout = { version = \"0.1.0\" }\n\n[dependencies]\nother = { path = \"x\", version = \"0.1.0\" }\n";
+        let want = "[workspace.package]\nversion = \"0.1.0-rc.1\"\n\n[workspace.dependencies]\nin = { path = \"crates/in\", version = \"0.1.0-rc.1\" }\nout = { version = \"0.1.0\" }\n\n[dependencies]\nother = { path = \"x\", version = \"0.1.0\" }\n";
+        assert_eq!(replace(m, "0.1.0-rc.1").unwrap(), want);
+    }
+
     #[test]
     fn keeps_crlf_line_endings() {
         let crlf = MANIFEST.replace('\n', "\r\n");
@@ -153,5 +178,25 @@ mod tests {
     fn the_real_manifest_has_a_valid_version() {
         let text = std::fs::read_to_string(crate::gates::root().join("Cargo.toml")).unwrap();
         validate(&read(&text).unwrap()).unwrap();
+    }
+
+    /// The internal pins are exactly what a `-rc.1` bump trips over, so they never drift from the
+    /// workspace version.
+    #[test]
+    fn the_real_manifest_pins_internal_crates_at_its_version() {
+        let text = std::fs::read_to_string(crate::gates::root().join("Cargo.toml")).unwrap();
+        let version = read(&text).unwrap();
+        let mut in_deps = false;
+        for line in text.lines() {
+            let t = line.trim();
+            if t.starts_with('[') {
+                in_deps = t == "[workspace.dependencies]";
+                continue;
+            }
+            if in_deps && t.contains("path = ") {
+                let pin = t.split("version = \"").nth(1).and_then(|rest| rest.split('"').next()).unwrap_or_default();
+                assert!(pin.is_empty() || pin == version, "{t}: pinned at {pin}, workspace is {version}");
+            }
+        }
     }
 }
