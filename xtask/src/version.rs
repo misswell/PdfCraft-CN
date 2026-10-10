@@ -24,7 +24,8 @@ pub fn read(manifest: &str) -> Result<String, String> {
 pub fn replace(manifest: &str, new: &str) -> Result<String, String> {
     validate(new)?;
     let (idx, _) = find_line(manifest)?;
-    let old = read(manifest)?;
+    // Refuse a manifest whose current version is not a version at all.
+    read(manifest)?;
     let mut out = String::with_capacity(manifest.len() + 8);
     let mut in_deps = false;
     for (i, line) in manifest.split_inclusive('\n').enumerate() {
