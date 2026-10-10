@@ -14,9 +14,9 @@
 # (the local notarization, say, died on a network hiccup): it skips the push and the wait and does
 # only the macOS rebuild, the swap and the publish.
 #
-# Env: MACOS_SIGN_IDENTITY, NOTARY_KEYCHAIN_PROFILE, CRAFT_FONTS_DIR, CI_TIMEOUT, FORK_REMOTE,
-# FORK_REPO. Refuses to publish unsigned work: if this machine cannot sign and notarize, the
-# release stays a draft and the run fails with the reason.
+# Env: MACOS_SIGN_IDENTITY, NOTARY_KEYCHAIN_PROFILE, CRAFT_FONTS_DIR, CI_TIMEOUT, PACKAGE_TRIES,
+# PACKAGE_BACKOFF, FORK_REMOTE, FORK_REPO. Refuses to publish unsigned work: if this machine cannot
+# sign and notarize, the release stays a draft and the run fails with the reason.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -30,6 +30,8 @@ IDENTITY=${MACOS_SIGN_IDENTITY:-Developer ID Application: Guofeng Liu (U8U443D7Z
 NOTARY_PROFILE=${NOTARY_KEYCHAIN_PROFILE:-octoshrink-notary}
 FONTS_DIR=${CRAFT_FONTS_DIR:-$ROOT/../craft-fonts}
 CI_TIMEOUT=${CI_TIMEOUT:-5400}
+PACKAGE_TRIES=${PACKAGE_TRIES:-5}
+PACKAGE_BACKOFF=${PACKAGE_BACKOFF:-120}
 
 VERSION=""
 NOTES=""
@@ -101,9 +103,18 @@ else
 fi
 
 # ---- rebuild macOS here, signed and notarized ----------------------------------------------------
-MACOS_SIGN_IDENTITY="$IDENTITY" NOTARY_KEYCHAIN_PROFILE="$NOTARY_PROFILE" \
-CRAFT_FONTS_DIR="$FONTS_DIR" CRAFT_FONTS_REQUIRED=1 \
-  packaging/macos/package.sh --arch universal
+# package.sh retries a submit whose upload died, but the uplink to Apple's submission bucket can be
+# bad for minutes at a stretch (evening congestion here), so back off and start it over — the build
+# is cached by then and a fresh burst of tries often gets through.
+attempt=1
+until MACOS_SIGN_IDENTITY="$IDENTITY" NOTARY_KEYCHAIN_PROFILE="$NOTARY_PROFILE" \
+      CRAFT_FONTS_DIR="$FONTS_DIR" CRAFT_FONTS_REQUIRED=1 \
+      packaging/macos/package.sh --arch universal; do
+  [ "$attempt" -lt "$PACKAGE_TRIES" ] || die "package.sh failed $attempt times; giving up"
+  attempt=$((attempt + 1))
+  echo "==> package.sh failed; retrying in ${PACKAGE_BACKOFF}s (attempt $attempt/$PACKAGE_TRIES)"
+  sleep "$PACKAGE_BACKOFF"
+done
 
 DMG="dist/release/pdfcraft-$VERSION-macos-universal.dmg"
 CLI="dist/release/pdfcraft-cli-$VERSION-macos-universal.zip"
