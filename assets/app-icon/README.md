@@ -1,18 +1,21 @@
 # PdfCraft CN app icon
 
-<img src="pdfcraft.png" alt="PdfCraft CN app icon: a white PDF page with a red P and a red cn ribbon on a dark navy rounded tile" width="128">
+<img src="pdfcraft.png" alt="PdfCraft CN app icon: a white page with a red folded corner and a red cn badge on a dark navy rounded tile" width="128">
 
-**Picture:** a white document page with its top-right corner folded, a red `P` on it, and a red ribbon
-banner reading `cn` across the bottom right — all on a dark navy rounded tile.
+**Picture:** a white document page with its top-right corner folded back, its lower-left corner turned
+up to show a red underside, and a red badge reading `cn` at the bottom right — all on a dark navy
+rounded tile with a lit bevel along its top edge.
 
 **Tile:** `pdfcraft.png` is a 1024 px full-bleed rounded square with transparent corners. Windows and
 Linux icons use the full-bleed tile. macOS icons put it on Apple's grid (an 824 px body centred on a
 transparent 1024 px canvas).
 
 **Provenance:** made for PdfCraft CN by @misswell, who generated the artwork with ChatGPT on 2026-10-10
-and owns it. The black corners of the generated canvas were keyed out to transparency and the art
-resized to the 1024 px master; nothing else was changed and no third-party material is in it. Licensed
-like the rest of the project: [LICENSE.txt](LICENSE.txt) (`MIT OR Apache-2.0`).
+and owns it. The canvas outside the tile was keyed out to transparency: the cut follows the drawn bevel
+(a rounded rectangle measured off the artwork — 270 px radius on the 1254 px generated canvas, fitted
+to its corner arc within 7 px), then the art was resized to the 1024 px master. Nothing else was
+changed and no third-party material is in it. Licensed like the rest of the project:
+[LICENSE.txt](LICENSE.txt) (`MIT OR Apache-2.0`).
 
 **Branch:** this icon lives on the `cn` branch of `misswell/PdfCraft-CN` only. Upstream PdfCraft ships
 its own icon; nothing here is proposed to it.
