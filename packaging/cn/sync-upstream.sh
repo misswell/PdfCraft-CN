@@ -91,7 +91,11 @@ if ! git merge --no-edit "$UP"; then
     die "merge conflicts in:$unresolved"
   fi
   for f in $(git diff --name-only --diff-filter=U); do
-    git checkout --theirs -- "$f" && git add "$f"
+    # Write upstream's content straight out of the commit it came from rather than trusting the
+    # conflicted index: `checkout --theirs` is state-dependent enough that a rehearsal of this
+    # exact merge failed on it once, and the release must not depend on which form the index is in.
+    git show "$UP:$f" > "$f"
+    git add "$f"
   done
   git commit --no-edit --quiet
 fi
