@@ -65,7 +65,10 @@ jobs:
   macos:
     name: macOS universal
     needs: version
-    runs-on: macos-15-xlarge  # M2 Pro larger runner; use only in release.yml (actions_macos_xl budget caps spend)
+    # Upstream's `macos-15-xlarge` is a billed larger runner: on this fork the job never starts
+    # ("recent account payments have failed or your spending limit needs to be increased"). The
+    # standard runner is free for a public repository; the universal build just takes longer.
+    runs-on: macos-15
     environment: release
     env:
       PDFCRAFT_VERSION: ${{ needs.version.outputs.version }}
