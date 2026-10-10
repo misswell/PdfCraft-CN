@@ -88,19 +88,28 @@ sign() {
 }
 
 notarize() {
-  local file="$1" out id status
-  echo "==> notarizing $(basename "$file") (this can take a few minutes)"
-  out="$(xcrun notarytool submit "$file" ${AUTH[@]+"${AUTH[@]}"} --wait --timeout 1h --output-format json)" || true
-  echo "$out"
-  id="$(printf '%s' "$out" | plutil -extract id raw -o - - 2>/dev/null || true)"
-  status="$(printf '%s' "$out" | plutil -extract status raw -o - - 2>/dev/null || true)"
-  if [ "$status" != "Accepted" ]; then
+  local file="$1" out id status attempt
+  # The upload into Apple's submission bucket can die transiently (an S3 deadline, not a verdict);
+  # a fresh submit then usually sails through, so retry only that case. Once Apple has the bytes and
+  # returns a verdict — Invalid, Rejected — resubmitting the same archive would just repeat it.
+  for attempt in 1 2 3; do
+    echo "==> notarizing $(basename "$file") (this can take a few minutes)"
+    out="$(xcrun notarytool submit "$file" ${AUTH[@]+"${AUTH[@]}"} --wait --timeout 1h --output-format json)" || true
+    id="$(printf '%s' "$out" | plutil -extract id raw -o - - 2>/dev/null || true)"
+    status="$(printf '%s' "$out" | plutil -extract status raw -o - - 2>/dev/null || true)"
+    if [ "$status" = "Accepted" ]; then
+      echo "$out"
+      return 0
+    fi
     if [ -n "$id" ]; then
       xcrun notarytool log "$id" ${AUTH[@]+"${AUTH[@]}"} || true
+      echo "error: notarization of $(basename "$file") failed (status: $status)" >&2
+      exit 1
     fi
-    echo "error: notarization of $(basename "$file") failed (status: ${status:-unknown})" >&2
-    exit 1
-  fi
+    warn "notarization submit of $(basename "$file") attempt $attempt did not complete: $(printf '%s' "$out" | head -c 300)"
+  done
+  echo "error: notarization of $(basename "$file") failed after 3 attempts" >&2
+  exit 1
 }
 
 # ---- PdfCraft.app ----------------------------------------------------------------------------

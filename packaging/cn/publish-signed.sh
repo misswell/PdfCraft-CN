@@ -6,11 +6,13 @@
 # pipeline, rebuilds macOS here with the Developer ID identity and Apple notarization, swaps those
 # two artifacts for the signed ones, repairs `SHA256SUMS.txt`, then publishes the draft.
 #
-#   packaging/cn/publish-signed.sh --notes FILE [--version X.Y.Z-cn.N] [--check]
+#   packaging/cn/publish-signed.sh --notes FILE [--version X.Y.Z-cn.N] [--check] [--finish]
 #
 # The notes are a required argument on purpose: release notes are prose about what users get, and
 # that is a person's (or an agent's) call, not a template's. `--check` only proves this machine can
-# sign and notarize, then stops.
+# sign and notarize, then stops. `--finish` resumes a run whose pipeline already pushed and passed
+# (the local notarization, say, died on a network hiccup): it skips the push and the wait and does
+# only the macOS rebuild, the swap and the publish.
 #
 # Env: MACOS_SIGN_IDENTITY, NOTARY_KEYCHAIN_PROFILE, CRAFT_FONTS_DIR, CI_TIMEOUT, FORK_REMOTE,
 # FORK_REPO. Refuses to publish unsigned work: if this machine cannot sign and notarize, the
@@ -32,6 +34,7 @@ CI_TIMEOUT=${CI_TIMEOUT:-5400}
 VERSION=""
 NOTES=""
 CHECK=0
+FINISH=0
 die() { printf 'publish: %s\n' "$*" >&2; exit 1; }
 sha() { shasum -a 256 "$1" | awk '{print $1}'; }
 
@@ -40,6 +43,7 @@ while [ $# -gt 0 ]; do
     --version) VERSION="$2"; shift 2 ;;
     --notes) NOTES="$2"; shift 2 ;;
     --check) CHECK=1; shift ;;
+    --finish) FINISH=1; shift ;;
     *) die "unknown argument $1" ;;
   esac
 done
@@ -64,28 +68,37 @@ if [ "$CHECK" = 1 ]; then
   echo "CHECK-OK $IDENTITY / profile $NOTARY_PROFILE / $FONTS_DIR"
   exit 0
 fi
-BEFORE="$(gh api "repos/$FORK_REPO/actions/workflows/release.yml/runs?per_page=1" --jq '.workflow_runs[0].id')"
-git branch -f release cn
-git push --quiet "$FORK_REMOTE" release:release
+if [ "$FINISH" = 1 ]; then
+  # The push and the wait already happened; `release` is where it was pushed and the tag exists.
+  # What remains is exactly the local half: rebuild macOS signed, swap, repair checksums, publish.
+  [ -z "$(git status --porcelain)" ] || die "--finish builds from the checked-out source; the tree is dirty"
+  gh release view "$TAG" --repo "$FORK_REPO" --json isDraft --jq .isDraft >/dev/null 2>&1 \
+    || die "no release $TAG on $FORK_REPO to finish"
+  echo "==> --finish: skipping the push and the pipeline wait for $TAG"
+else
+  BEFORE="$(gh api "repos/$FORK_REPO/actions/workflows/release.yml/runs?per_page=1" --jq '.workflow_runs[0].id')"
+  git branch -f release cn
+  git push --quiet "$FORK_REMOTE" release:release
 
-echo "==> waiting for release.yml"
-DEADLINE=$(( $(date +%s) + CI_TIMEOUT ))
-RUN=""
-while [ "${RUN:-}" = "" ] || [ "$RUN" = "$BEFORE" ]; do
-  [ "$(date +%s)" -lt "$DEADLINE" ] || die "no new release.yml run appeared after $BEFORE"
-  sleep 30
-  RUN="$(gh api "repos/$FORK_REPO/actions/workflows/release.yml/runs?branch=release&per_page=1" \
-    --jq '.workflow_runs[0].id // ""')"
-done
-echo "==> https://github.com/$FORK_REPO/actions/runs/$RUN"
-while :; do
-  STATUS="$(gh api "repos/$FORK_REPO/actions/runs/$RUN" --jq '.status')"
-  if [ "$STATUS" = completed ]; then break; fi
-  [ "$(date +%s)" -lt "$DEADLINE" ] || die "run $RUN still $STATUS after ${CI_TIMEOUT}s"
-  sleep 60
-done
-CONCLUSION="$(gh api "repos/$FORK_REPO/actions/runs/$RUN" --jq '.conclusion')"
-[ "$CONCLUSION" = success ] || die "run $RUN finished '$CONCLUSION'"
+  echo "==> waiting for release.yml"
+  DEADLINE=$(( $(date +%s) + CI_TIMEOUT ))
+  RUN=""
+  while [ "${RUN:-}" = "" ] || [ "$RUN" = "$BEFORE" ]; do
+    [ "$(date +%s)" -lt "$DEADLINE" ] || die "no new release.yml run appeared after $BEFORE"
+    sleep 30
+    RUN="$(gh api "repos/$FORK_REPO/actions/workflows/release.yml/runs?branch=release&per_page=1" \
+      --jq '.workflow_runs[0].id // ""')"
+  done
+  echo "==> https://github.com/$FORK_REPO/actions/runs/$RUN"
+  while :; do
+    STATUS="$(gh api "repos/$FORK_REPO/actions/runs/$RUN" --jq '.status')"
+    if [ "$STATUS" = completed ]; then break; fi
+    [ "$(date +%s)" -lt "$DEADLINE" ] || die "run $RUN still $STATUS after ${CI_TIMEOUT}s"
+    sleep 60
+  done
+  CONCLUSION="$(gh api "repos/$FORK_REPO/actions/runs/$RUN" --jq '.conclusion')"
+  [ "$CONCLUSION" = success ] || die "run $RUN finished '$CONCLUSION'"
+fi
 
 # ---- rebuild macOS here, signed and notarized ----------------------------------------------------
 MACOS_SIGN_IDENTITY="$IDENTITY" NOTARY_KEYCHAIN_PROFILE="$NOTARY_PROFILE" \
