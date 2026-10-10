@@ -295,7 +295,8 @@ jobs:
         run: |
           sudo apt-get update
           # librsvg2-common: the SVG pixbuf loader. flatpak-builder runs the host's
-          # `appstreamcli compose`, which renders the scalable icon and fails without it.
+          # `appstreamcli compose`, which renders the app icon from the hicolor theme.
+          # Our icon is the PNG set, so this only covers themed SVGs it may look up.
           sudo apt-get install -y --no-install-recommends flatpak flatpak-builder librsvg2-common
           # Ubuntu 24.04's AppArmor blocks the unprivileged user namespaces bubblewrap needs.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0

@@ -1,54 +1,58 @@
 #!/usr/bin/env bash
-# Regenerate every app icon from assets/app-icon/pdfcraft.svg (the master vector).
+# Regenerate every app icon from assets/app-icon/pdfcraft.png (the master tile: 1024 px, full bleed,
+# transparent outside the rounded square).
 #
-# Needs: resvg (brew install resvg / cargo install resvg) and python3 (stdlib only, for the .ico).
-# On macOS, iconutil also writes the .icns. The outputs are committed, so building and packaging
-# never need these tools. After running it, update the sha256 values in ATTRIBUTION.toml, then
-# `cargo xtask assets --write`.
+# Needs python3 with Pillow (pip install pillow). On macOS, iconutil also writes the .icns. The
+# outputs are committed, so building and packaging never need these tools. After running it, update
+# the sha256 values in ATTRIBUTION.toml, then `cargo xtask assets --write`.
 #
 #   packaging/icons.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIR="$ROOT/assets/app-icon"
-SVG="$DIR/pdfcraft.svg"
+PNG="$DIR/pdfcraft.png"
 ID="ai.storyteller.pdfcraft"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-command -v resvg >/dev/null || { echo "error: resvg not found (brew install resvg)" >&2; exit 1; }
+[ -f "$PNG" ] || { echo "error: $PNG not found" >&2; exit 1; }
 
-# The master is a full-bleed 512 tile (rx=112): right for Windows and Linux. macOS icons follow
-# Apple's grid instead: an 824 px body centred on a transparent 1024 canvas.
-MAC="$TMP/macos.svg"
-{
-  echo '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1024 1024">'
-  echo '<image x="100" y="100" width="824" height="824" xlink:href="'"$SVG"'"/>'
-  echo '</svg>'
-} >"$MAC"
+# The master is a full-bleed rounded tile: right for Windows and Linux. macOS icons follow Apple's
+# grid instead: an 824 px body centred on a transparent 1024 px canvas.
+python3 - "$PNG" "$DIR" "$ID" "$TMP" <<'PY'
+import struct, sys
+from PIL import Image
 
-render() { resvg -w "$2" -h "$2" "$1" "$3" </dev/null; }
+master_path, out_dir, app_id, tmp = sys.argv[1:5]
+master = Image.open(master_path).convert("RGBA")
 
-# 1024 px PNG on Apple's grid (also the runtime Dock icon on macOS, see apps/pdfcraft/src/main.rs).
-render "$MAC" 1024 "$DIR/pdfcraft-1024.png"
+
+def tile(size):
+    """The master at `size` px, full bleed."""
+    return master.resize((size, size), Image.LANCZOS)
+
+
+def apple_grid(size):
+    """The tile on Apple's grid: the body at 824/1024 of the canvas, centred, padding transparent."""
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    body = tile(round(size * 824 / 1024))
+    canvas.paste(body, ((size - body.width) // 2,) * 2, body)
+    return canvas
+
+
+# 1024 px on Apple's grid (also the runtime Dock icon on macOS, see apps/pdfcraft/src/main.rs).
+apple_grid(1024).save(f"{out_dir}/pdfcraft-1024.png")
 
 # Linux hicolor theme (full bleed; hicolor/256x256 is also the runtime icon on Windows and Linux).
-for s in 16 24 32 48 64 128 256 512; do
-  mkdir -p "$DIR/hicolor/${s}x${s}/apps"
-  render "$SVG" "$s" "$DIR/hicolor/${s}x${s}/apps/$ID.png"
-done
-mkdir -p "$DIR/hicolor/scalable/apps"
-cp "$SVG" "$DIR/hicolor/scalable/apps/$ID.svg"
+for s in (16, 24, 32, 48, 64, 128, 256, 512):
+    tile(s).save(f"{out_dir}/hicolor/{s}x{s}/apps/{app_id}.png")
 
 # Windows .ico: PNG-compressed entries, 16-256 px.
-ICO_PNGS=()
-for s in 16 20 24 32 40 48 64 128 256; do
-  render "$SVG" "$s" "$TMP/ico-$s.png"
-  ICO_PNGS+=("$TMP/ico-$s.png")
-done
-python3 - "$DIR/pdfcraft.ico" "${ICO_PNGS[@]}" <<'PY'
-import struct, sys
-out, pngs = sys.argv[1], sys.argv[2:]
-blobs = [open(p, "rb").read() for p in pngs]
+blobs = []
+for s in (16, 20, 24, 32, 40, 48, 64, 128, 256):
+    path = f"{tmp}/ico-{s}.png"
+    tile(s).save(path)
+    blobs.append(open(path, "rb").read())
 head = struct.pack("<HHH", 0, 1, len(blobs))
 entries, data, offset = b"", b"", 6 + 16 * len(blobs)
 for b in blobs:
@@ -56,18 +60,21 @@ for b in blobs:
     entries += struct.pack("<BBBBHHII", w % 256, h % 256, 0, 0, 1, 32, len(b), offset)
     data += b
     offset += len(b)
-open(out, "wb").write(head + entries + data)
+open(f"{out_dir}/pdfcraft.ico", "wb").write(head + entries + data)
+
+# The iconset the .icns is built from.
+import os
+
+set_dir = f"{tmp}/{app_id}.iconset"
+os.makedirs(set_dir, exist_ok=True)
+for s in (16, 32, 128, 256, 512):
+    apple_grid(s).save(f"{set_dir}/icon_{s}x{s}.png")
+    apple_grid(s * 2).save(f"{set_dir}/icon_{s}x{s}@2x.png")
+open(f"{tmp}/iconset", "w").write(set_dir)
 PY
 
-# macOS .icns.
 if command -v iconutil >/dev/null; then
-  SET="$TMP/pdfcraft.iconset"
-  mkdir -p "$SET"
-  for s in 16 32 128 256 512; do
-    render "$MAC" "$s" "$SET/icon_${s}x${s}.png"
-    render "$MAC" $((s * 2)) "$SET/icon_${s}x${s}@2x.png"
-  done
-  iconutil -c icns -o "$DIR/pdfcraft.icns" "$SET"
+  iconutil -c icns -o "$DIR/pdfcraft.icns" "$(cat "$TMP/iconset")"
 else
   echo "warning: iconutil not found (macOS only); pdfcraft.icns not regenerated" >&2
 fi
