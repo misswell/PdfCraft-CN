@@ -14,7 +14,7 @@
 # --dry-run: merge and verify, then stop before pushing.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 FORK_REMOTE=${FORK_REMOTE:-me}
@@ -111,8 +111,9 @@ fi
 
 # Upstream picks the billed larger macOS runner; this account cannot start it, so the macOS job
 # would never run and the release would ship without it (docs/releasing.md).
-grep -q "runs-on: macos-15-xlarge" .github/workflows/release.yml \
-  && die "release.yml is back on macos-15-xlarge; keep the cn edit"
+if grep -q "runs-on: macos-15-xlarge" .github/workflows/release.yml; then
+  die "release.yml is back on macos-15-xlarge; keep the cn edit"
+fi
 
 cargo metadata --locked --format-version 1 >/dev/null || die "Cargo.lock does not match the manifests"
 cargo xtask ci || die "cargo xtask ci failed on $SCRATCH; nothing was pushed"

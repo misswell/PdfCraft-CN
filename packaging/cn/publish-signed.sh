@@ -17,7 +17,7 @@
 # release stays a draft and the run fails with the reason.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 FORK_REMOTE=${FORK_REMOTE:-me}
