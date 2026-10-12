@@ -58,8 +58,11 @@ fi
 [ -z "$(git status --porcelain)" ] || die "working tree is not clean"
 
 # The auto-resolved version conflict below takes upstream's whole `Cargo.toml`, which is only
-# safe while cn edits nothing in it besides version strings.
-if ! diff -q <(git show "$UP:Cargo.toml" | blank_versions /dev/stdin) \
+# safe while cn edits nothing in it besides version strings. Compare cn against the last sync
+# point (`merge-base`), not against upstream's tip: upstream's own additions between the two
+# are exactly what we are merging in and must not be mistaken for cn edits.
+MB="$(git merge-base "$UP" "$CN")"
+if ! diff -q <(git show "$MB:Cargo.toml" | blank_versions /dev/stdin) \
              <(git show "$CN:Cargo.toml" | blank_versions /dev/stdin) >/dev/null; then
   die "cn carries its own Cargo.toml edits; merge by hand"
 fi

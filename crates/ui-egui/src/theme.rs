@@ -22,13 +22,15 @@ pub enum ThemePreference {
 }
 
 impl ThemePreference {
-    pub fn resolve(self, system: Option<egui::Theme>, fallback: ThemeKind) -> ThemeKind {
+    /// The colours to draw. `system` is what the operating system says, `None` when it says
+    /// nothing; `fallback` is supplied by the caller. PdfCraft uses Light for an unknown desktop.
+    pub fn resolve(self, system: Option<bool>, fallback: ThemeKind) -> ThemeKind {
         match self {
             Self::Light => ThemeKind::Light,
             Self::Dark => ThemeKind::Dark,
             Self::System => match system {
-                Some(egui::Theme::Light) => ThemeKind::Light,
-                Some(egui::Theme::Dark) => ThemeKind::Dark,
+                Some(true) => ThemeKind::Dark,
+                Some(false) => ThemeKind::Light,
                 None => fallback,
             },
         }
@@ -131,11 +133,32 @@ pub fn install_fonts(ctx: &egui::Context) {
     ctx.set_fonts(font_definitions());
 }
 
+/// The interface language's claim on the CJK fallback faces.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CjkPreference {
+    /// Japanese faces first (every non-Chinese language).
+    #[default]
+    Default,
+    SimplifiedChinese,
+    TraditionalChinese,
+}
+
+impl CjkPreference {
+    /// The preference for a UI language code (`zh-hans`, `zh-hant`, anything else).
+    pub fn for_language(code: &str) -> Self {
+        match code {
+            "zh-hans" => Self::SimplifiedChinese,
+            "zh-hant" => Self::TraditionalChinese,
+            _ => Self::Default,
+        }
+    }
+}
+
 /// Install the interface fonts with the CJK fallback order for the UI language (Chinese
-/// first for Simplified Chinese, Japanese first otherwise). Call it when the language
-/// changes; the new faces take effect next frame.
-pub fn install_fonts_for(ctx: &egui::Context, prefer_hans: bool) {
-    ctx.set_fonts(installed_font_definitions(prefer_hans));
+/// first for Chinese, Japanese first otherwise). Call it when the language changes; the new
+/// faces take effect next frame.
+pub fn install_fonts_for(ctx: &egui::Context, cjk: CjkPreference) {
+    ctx.set_fonts(installed_font_definitions(cjk));
 }
 
 /// The existing installed Arabic-script fallback, last in every interface family.
@@ -148,7 +171,10 @@ pub const SYSTEM_CHINESE_FALLBACK: &str = "system-chinese-fallback";
 /// script-specific characters on the same baseline, but follows any embedded Chinese face.
 /// In other languages it follows all embedded faces (including Japanese). The existing
 /// Arabic fallback stays last. `PDFCRAFT_SYSTEM_FONTS=0` leaves both installed faces out.
-pub fn installed_font_definitions(prefer_hans: bool) -> FontDefinitions {
+pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
+    // Both Chinese scripts share the one installed Han face ([`pdfcraft_fonts::han`]), so they
+    // differ only in the craft-fonts ordering; only a non-Chinese interface keeps it last.
+    let prefer_hans = cjk != CjkPreference::Default;
     #[cfg_attr(target_arch = "wasm32", expect(unused_mut))]
     let mut fonts = font_definitions_for(prefer_hans);
     #[cfg(not(target_arch = "wasm32"))]
@@ -171,8 +197,9 @@ pub fn installed_font_definitions(prefer_hans: bool) -> FontDefinitions {
 }
 
 /// The interface fonts: Inter (and JetBrains Mono for code) first, then egui's defaults, then
-/// the CJK, Arabic and Telugu faces of the optional craft-fonts build input as the last fallback
-/// in every family. Without craft-fonts there is no Japanese, Chinese, Arabic or Telugu face here.
+/// the CJK, Arabic, Telugu, Hebrew and Thai faces of the optional craft-fonts build input as the
+/// last fallback in every family. Without craft-fonts there is no Japanese, Chinese, Arabic,
+/// Telugu, Hebrew or Thai face here.
 pub fn font_definitions() -> FontDefinitions {
     font_definitions_for(false)
 }
@@ -186,7 +213,8 @@ pub fn font_definitions_for(prefer_hans: bool) -> FontDefinitions {
     let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
         fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_static(bytes)));
     };
-    add(&mut fonts, "Inter", include_bytes!("../../../assets/fonts/Inter-Regular.ttf"));
+    // Shared with typed signatures' fallback glyphs, so the font is embedded once.
+    add(&mut fonts, "Inter", pdfcraft_fonts::INTER_REGULAR);
     add(&mut fonts, "Inter-Medium", include_bytes!("../../../assets/fonts/Inter-Medium.ttf"));
     add(&mut fonts, "Inter-SemiBold", include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf"));
     add(&mut fonts, "JetBrainsMono", include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"));
@@ -203,9 +231,15 @@ pub fn font_definitions_for(prefer_hans: bool) -> FontDefinitions {
             fonts.families.entry(family).or_default().push(name.clone());
         }
     }
-    // Arabic-script faces (file names, document titles) and Telugu faces (the Telugu interface,
-    // file names) after the CJK ones; the ranges don't overlap.
-    for face in pdfcraft_fonts::ui_arabic_fonts().into_iter().chain(pdfcraft_fonts::ui_telugu_fonts()) {
+    // Arabic-script faces (file names, document titles), Telugu faces (the Telugu interface,
+    // file names), Hebrew faces (file names, text being edited) and Thai faces after the CJK ones; the
+    // ranges don't overlap.
+    for face in pdfcraft_fonts::ui_arabic_fonts()
+        .into_iter()
+        .chain(pdfcraft_fonts::ui_telugu_fonts())
+        .chain(pdfcraft_fonts::ui_hebrew_fonts())
+        .chain(pdfcraft_fonts::ui_thai_fonts())
+    {
         let name = face.name();
         if !fonts.font_data.contains_key(&name) {
             add(&mut fonts, &name, face.bytes);
@@ -237,8 +271,10 @@ pub fn semibold(size: f32) -> FontId {
 }
 
 pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
-    // egui must use the same theme for popup/menu styles as our custom chrome.
-    ctx.set_theme(if kind == ThemeKind::Dark { egui::Theme::Dark } else { egui::Theme::Light });
+    // Keep the native window inherited. A concrete egui theme pins macOS's
+    // NSWindow appearance and prevents winit from delivering ThemeChanged.
+    // Our saved choice owns the palette; both egui branches receive it below.
+    ctx.set_theme(egui::ThemePreference::System);
     let t = Tokens::for_kind(kind);
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("pdfcraft-theme"), t));
     let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
@@ -291,11 +327,31 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
         s.text_styles.insert(egui::TextStyle::Heading, semibold(17.0));
         s.interaction.tooltip_delay = 0.35;
     });
+    let style = ctx.global_style();
+    ctx.set_style_of(egui::Theme::Light, style.clone());
+    ctx.set_style_of(egui::Theme::Dark, style);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// "Use system setting" draws what the operating system says, dark or light.
+    #[test]
+    fn following_the_system_draws_what_the_system_says() {
+        assert_eq!(ThemePreference::System.resolve(Some(true), ThemeKind::Light), ThemeKind::Dark);
+        assert_eq!(ThemePreference::System.resolve(Some(false), ThemeKind::Dark), ThemeKind::Light);
+    }
+
+    /// An operating system that says nothing leaves the last choice standing, and an explicit
+    /// Light or Dark is never overridden by what the system says.
+    #[test]
+    fn an_answerless_system_leaves_the_choice_and_an_explicit_one_stands() {
+        assert_eq!(ThemePreference::System.resolve(None, ThemeKind::Light), ThemeKind::Light);
+        assert_eq!(ThemePreference::System.resolve(None, ThemeKind::Dark), ThemeKind::Dark);
+        assert_eq!(ThemePreference::Light.resolve(Some(true), ThemeKind::Dark), ThemeKind::Light);
+        assert_eq!(ThemePreference::Dark.resolve(Some(false), ThemeKind::Light), ThemeKind::Dark);
+    }
 
     /// WCAG 2 contrast ratio between two opaque colours.
     fn contrast(a: Color32, b: Color32) -> f32 {

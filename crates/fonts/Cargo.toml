@@ -16,3 +16,4 @@ skrifa = "0.44"
 harfrust = "0.12"
 # One line when an installed fallback face is found (system module).
 log = { workspace = true }
+unicode-bidi = "0.3"

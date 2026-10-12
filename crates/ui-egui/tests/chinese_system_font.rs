@@ -35,7 +35,7 @@ fn translated_chars(catalog: &str) -> BTreeSet<char> {
 /// ships a Chinese interface is exactly the build that must not pass by skipping, so the release
 /// jobs set `PDFCRAFT_TEST_REQUIRE_CJK=1` and the check fails instead of going green.
 fn installed_face_or_skip(what: &str) -> bool {
-    if theme::installed_font_definitions(true).font_data.contains_key(theme::SYSTEM_CHINESE_FALLBACK) {
+    if theme::installed_font_definitions(theme::CjkPreference::SimplifiedChinese).font_data.contains_key(theme::SYSTEM_CHINESE_FALLBACK) {
         return true;
     }
     assert!(
@@ -50,7 +50,7 @@ fn installed_face_or_skip(what: &str) -> bool {
 fn chinese_catalogs_and_filenames_keep_arabic_fallback() {
     // The installed faces are only ever added on top of the embedded ones.
     assert!(!theme::font_definitions_for(true).font_data.contains_key(theme::SYSTEM_CHINESE_FALLBACK));
-    let defs = theme::installed_font_definitions(true);
+    let defs = theme::installed_font_definitions(theme::CjkPreference::SimplifiedChinese);
     if !defs.font_data.contains_key(theme::SYSTEM_CHINESE_FALLBACK) {
         assert!(defs.families.values().all(|stack| !stack.iter().any(|name| name == theme::SYSTEM_CHINESE_FALLBACK)));
         assert!(
@@ -61,8 +61,9 @@ fn chinese_catalogs_and_filenames_keep_arabic_fallback() {
         return;
     }
 
-    for prefer_hans in [true, false] {
-        let defs = theme::installed_font_definitions(prefer_hans);
+    for cjk in [theme::CjkPreference::SimplifiedChinese, theme::CjkPreference::TraditionalChinese, theme::CjkPreference::Default] {
+        let prefer_hans = cjk != theme::CjkPreference::Default;
+        let defs = theme::installed_font_definitions(cjk);
         let embedded = theme::font_definitions_for(prefer_hans);
         let japanese: Vec<String> = pdfcraft_fonts::ui_japanese_fonts().iter().map(|face| face.name()).collect();
         let chinese: Vec<String> = pdfcraft_fonts::ui_chinese_fonts().iter().map(|face| face.name()).collect();
@@ -94,7 +95,7 @@ fn chinese_catalogs_and_filenames_keep_arabic_fallback() {
         let chars = translated_chars(catalog);
         total += chars.len();
         let chars: String = chars.iter().collect();
-        check_glyphs(theme::installed_font_definitions(true), &chars);
+        check_glyphs(theme::installed_font_definitions(theme::CjkPreference::SimplifiedChinese), &chars);
     }
     println!(
         "verified {total} unique non-ASCII translated glyphs (zh-hans + zh-hant) in four UI families; Chinese file names in both font orders; Arabic fallback retained"
@@ -113,7 +114,7 @@ fn chinese_text_shares_the_interface_baseline() {
     if !installed_face_or_skip("Chinese baseline alignment") {
         return;
     }
-    let defs = theme::installed_font_definitions(true);
+    let defs = theme::installed_font_definitions(theme::CjkPreference::SimplifiedChinese);
     for size in [13.0, 17.0, 26.0] {
         let mut fonts = Fonts::new(TextOptions::default(), defs.clone());
         fonts.begin_pass(TextOptions::default());
@@ -152,7 +153,7 @@ fn publication_opt_out_disables_both_runtime_faces() {
     if std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_none_or(|value| value != "0") {
         return;
     }
-    let defs = theme::installed_font_definitions(true);
+    let defs = theme::installed_font_definitions(theme::CjkPreference::SimplifiedChinese);
     for name in [theme::SYSTEM_FALLBACK, theme::SYSTEM_CHINESE_FALLBACK] {
         assert!(!defs.font_data.contains_key(name));
         assert!(defs.families.values().all(|stack| !stack.iter().any(|entry| entry == name)));
