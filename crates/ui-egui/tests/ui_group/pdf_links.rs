@@ -93,6 +93,8 @@ fn removing_all_links_and_undo() {
     let (a, b) = (at(&h, 40.0, 300.0), at(&h, 160.0, 320.0));
     drag(&mut h, a, b);
     h.state_mut().link_draft.as_mut().unwrap().url = "https://example.org".into();
+    // A valid address enables OK and moves it: give the dialog the frame it needs to redraw first.
+    h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
     assert_eq!(links(&h).len(), 1);
@@ -123,6 +125,8 @@ fn the_link_context_menu_shows_only_for_a_right_click_on_a_link() {
     let (a, b) = (at(&h, 40.0, 100.0), at(&h, 160.0, 120.0));
     drag(&mut h, a, b);
     h.state_mut().link_draft.as_mut().unwrap().url = "https://example.org".into();
+    // A valid address enables OK and moves it: give the dialog the frame it needs to redraw first.
+    h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
     let (on_link, away) = (at(&h, 100.0, 110.0), at(&h, 250.0, 200.0));
