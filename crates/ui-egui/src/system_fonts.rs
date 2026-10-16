@@ -1,9 +1,14 @@
 //! Runtime interface fallbacks, read from fonts already installed on this machine.
 //!
-//! The Arabic-script face is the last fallback in every family. The Chinese face comes from
-//! [`pdfcraft_fonts::han`], the same installed face the page renderer falls back to, so one search
-//! answers for both. These faces are UI-only: never embedded, copied or shipped (AGENTS.md §1.4).
-//! `PDFCRAFT_SYSTEM_FONTS=0` disables both (published screenshots do).
+//! The embedded faces (Inter, egui's defaults, craft-fonts) come first in every family; these
+//! faces only draw characters none of them has, such as an Arabic file name in a build without
+//! craft-fonts. The Chinese face comes from [`pdfcraft_fonts::han`], the same installed face the
+//! page renderer falls back to, so one search answers for both — and it is installed whatever the
+//! interface language is, because a Chinese file name in an English interface needs it too (#826).
+//! Installed Devanagari, Telugu, Sinhala and Tamil faces, [`devanagari_fallback`] and friends,
+//! draw Hindi, Telugu (#1531), Sinhala and Tamil (#1688) when one is installed. These faces are
+//! UI-only: never embedded, copied or shipped (AGENTS.md §1.4), and `PDFCRAFT_SYSTEM_FONTS=0`
+//! turns them all off (published screenshots do).
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -11,22 +16,34 @@ use std::sync::{Arc, OnceLock};
 
 use egui::FontData;
 
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+mod fontconfig;
+
 /// Larger files are not read: a font path is still untrusted input.
 const MAX_BYTES: u64 = 32 << 20;
 /// Faces tried in a collection (`.ttc`).
 const MAX_FACES: u32 = 16;
-/// Arabic letter alef: the face must have it to be worth loading.
+/// Arabic letter alef: the face must have it to be worth loading for Arabic script.
 const PROBE: &str = "\u{0627}";
+/// Devanagari letter ka: the face must have it to cover Hindi.
+const DEVANAGARI_PROBE: &str = "\u{0915}";
+/// Telugu letter ka: the face must have it to cover Telugu.
+const TELUGU_PROBE: &str = "\u{0C15}";
+/// Sinhala letter ka (ක): the face must have it to cover Sinhala.
+const SINHALA_PROBE: &str = "\u{0D9A}";
+/// Tamil letter ka (க): the face must have it to cover Tamil.
+const TAMIL_PROBE: &str = "\u{0B95}";
 
 /// The installed Arabic-script fallback, read once. `None` when it is turned off or no candidate
 /// fits.
 pub fn fallback() -> Option<Arc<FontData>> {
     static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
-    CACHE.get_or_init(|| load(&candidates(), PROBE)).clone()
+    CACHE.get_or_init(|| script_fallback(&candidates(), PROBE)).clone()
 }
 
 /// One installed Chinese face, independent of the interface language: a Chinese file name in an
-/// English interface needs it too. `None` in a web build and when the machine has no Chinese face.
+/// English interface needs it too. `None` when the machine has no Chinese face, and when installed
+/// faces are turned off ([`pdfcraft_fonts::han`] answers for both).
 pub fn chinese_fallback() -> Option<Arc<FontData>> {
     static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
     CACHE
@@ -34,39 +51,178 @@ pub fn chinese_fallback() -> Option<Arc<FontData>> {
             let face = pdfcraft_fonts::han()?;
             let mut data = FontData::from_owned((*face.bytes).clone());
             data.index = face.index;
-            data.tweak.y_offset_factor = pdfcraft_fonts::ui_y_offset_factor(PRIMARY_UI_FONT);
-            Some(Arc::new(data))
+            log::info!("interface Chinese font fallback: face {}", face.index);
+            Some(Arc::new(crate::theme::on_interface_baseline(data)))
         })
         .clone()
 }
 
-/// The face Chinese text shares a line with: every family starts with an Inter, and Inter's three
-/// weights have the same vertical metrics. Its tall row makes egui lift a Chinese face's glyphs
-/// above it, which [`pdfcraft_fonts::ui_y_offset_factor`] cancels.
-const PRIMARY_UI_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+/// The installed fallback face for Devanagari (Hindi), read once. `None` when it is turned off
+/// or no candidate is installed; the interface then draws what the embedded faces can.
+pub fn devanagari_fallback() -> Option<Arc<FontData>> {
+    static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
+    CACHE.get_or_init(|| script_fallback(&devanagari_candidates(), DEVANAGARI_PROBE)).clone()
+}
 
-fn load(paths: &[PathBuf], probes: &str) -> Option<Arc<FontData>> {
+/// The installed fallback face for Telugu, read once. `None` when it is turned off or no
+/// candidate is installed; the interface then draws what the embedded faces can.
+pub fn telugu_fallback() -> Option<Arc<FontData>> {
+    static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
+    CACHE.get_or_init(|| script_fallback(&telugu_candidates(), TELUGU_PROBE)).clone()
+}
+
+/// The installed fallback face for Sinhala, read once. `None` when it is turned off or no
+/// candidate is installed; the interface then draws what the embedded faces can.
+pub fn sinhala_fallback() -> Option<Arc<FontData>> {
+    static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
+    CACHE.get_or_init(|| script_fallback(&sinhala_candidates(), SINHALA_PROBE)).clone()
+}
+
+/// The installed fallback face for Tamil, read once. `None` when it is turned off or no
+/// candidate is installed; the interface then draws what the embedded faces can.
+pub fn tamil_fallback() -> Option<Arc<FontData>> {
+    static CACHE: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
+    CACHE.get_or_init(|| script_fallback(&tamil_candidates(), TAMIL_PROBE)).clone()
+}
+
+/// The first candidate that is a readable font covering every one of `probes`.
+fn script_fallback(candidates: &[PathBuf], probes: &str) -> Option<Arc<FontData>> {
     if std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0") {
         return None;
     }
-    paths.iter().find_map(|path| read(path, probes))
+    candidates.iter().find_map(|path| read(path, probes))
 }
 
-fn windows_font_dir() -> PathBuf {
-    std::env::var_os("WINDIR").or_else(|| std::env::var_os("SystemRoot")).map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from)
+/// Well-known locations of Devanagari (Hindi) faces, best first.
+fn devanagari_candidates() -> Vec<PathBuf> {
+    if cfg!(windows) {
+        ["Nirmala.ttf", "NirmalaB.ttf", "mangal.ttf", "aparaj.ttf", "utsah.ttf"].iter().map(|f| windows_fonts().join(f)).collect()
+    } else if cfg!(target_os = "macos") {
+        [
+            "/System/Library/Fonts/Supplemental/DevanagariMT.ttc",
+            "/System/Library/Fonts/Supplemental/DevanagariSangamMN.ttc",
+            "/System/Library/Fonts/Supplemental/Kohinoor.ttc",
+            "/System/Library/Fonts/Kohinoor.ttc",
+            "/Library/Fonts/Arial Unicode.ttf",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .collect()
+    } else {
+        unix_fonts(&[
+            "google-noto/NotoSansDevanagariUI-Regular.ttf",
+            "google-noto/NotoSansDevanagari-Regular.ttf",
+            "google-noto-vf/NotoSansDevanagari[wght].ttf",
+            "truetype/noto/NotoSansDevanagari-Regular.ttf",
+            "truetype/noto/NotoSansDevanagariUI-Regular.ttf",
+            "noto/NotoSansDevanagari-Regular.ttf",
+            "noto/NotoSansDevanagariUI-Regular.ttf",
+            "lohit-devanagari-fonts/Lohit-Devanagari.ttf",
+            "truetype/lohit-devanagari/Lohit-Devanagari.ttf",
+            "truetype/deva/Lohit-Devanagari.ttf",
+            "lohit-hindi/Lohit-Hindi.ttf",
+            "google-droid-sans-fonts/DroidSansDevanagari-Regular.ttf",
+            "samyak-fonts/Samyak-Devanagari.ttf",
+            "gargi/Gargi.ttf",
+        ])
+    }
 }
 
-/// Well-known locations of faces with broad script coverage, best first.
+/// Well-known locations of Telugu faces, best first.
+fn telugu_candidates() -> Vec<PathBuf> {
+    if cfg!(windows) {
+        ["Nirmala.ttc", "Nirmala.ttf", "gautami.ttf"].iter().map(|f| windows_fonts().join(f)).collect()
+    } else if cfg!(target_os = "macos") {
+        [
+            "/System/Library/Fonts/KohinoorTelugu.ttc",
+            "/System/Library/Fonts/Supplemental/Telugu Sangam MN.ttc",
+            "/System/Library/Fonts/Supplemental/Telugu MN.ttc",
+            "/Library/Fonts/Arial Unicode.ttf",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .collect()
+    } else {
+        unix_fonts(&[
+            "google-noto/NotoSansTeluguUI-Regular.ttf",
+            "google-noto/NotoSansTelugu-Regular.ttf",
+            "google-noto-vf/NotoSansTelugu[wght].ttf",
+            "google-noto-vf/NotoSansTelugu-UI[wght].ttf",
+            "truetype/noto/NotoSansTelugu-Regular.ttf",
+            "truetype/noto/NotoSansTeluguUI-Regular.ttf",
+            "noto/NotoSansTelugu-Regular.ttf",
+            "noto/NotoSansTeluguUI-Regular.ttf",
+            "lohit-telugu-fonts/Lohit-Telugu.ttf",
+            "truetype/lohit-telugu/Lohit-Telugu.ttf",
+            "truetype/fonts-telu-extra/Pothana2000.ttf",
+        ])
+    }
+}
+
+/// Well-known locations of Sinhala faces, best first. Nirmala UI has Sinhala from Windows 10;
+/// Iskoola Pota is the older Windows Sinhala face.
+fn sinhala_candidates() -> Vec<PathBuf> {
+    if cfg!(windows) {
+        ["Nirmala.ttc", "Nirmala.ttf", "iskpota.ttf"].iter().map(|f| windows_fonts().join(f)).collect()
+    } else if cfg!(target_os = "macos") {
+        ["/System/Library/Fonts/Supplemental/Sinhala Sangam MN.ttc", "/System/Library/Fonts/Supplemental/Sinhala MN.ttc"]
+            .iter()
+            .map(PathBuf::from)
+            .collect()
+    } else {
+        unix_fonts(&[
+            "google-noto/NotoSansSinhalaUI-Regular.ttf",
+            "google-noto/NotoSansSinhala-Regular.ttf",
+            "google-noto-vf/NotoSansSinhala[wght].ttf",
+            "truetype/noto/NotoSansSinhala-Regular.ttf",
+            "truetype/noto/NotoSansSinhalaUI-Regular.ttf",
+            "noto/NotoSansSinhala-Regular.ttf",
+            "noto/NotoSansSinhalaUI-Regular.ttf",
+        ])
+    }
+}
+
+/// Well-known locations of Tamil faces, best first. Latha is the older Windows Tamil face.
+fn tamil_candidates() -> Vec<PathBuf> {
+    if cfg!(windows) {
+        ["Nirmala.ttc", "Nirmala.ttf", "latha.ttf"].iter().map(|f| windows_fonts().join(f)).collect()
+    } else if cfg!(target_os = "macos") {
+        [
+            "/System/Library/Fonts/Supplemental/Tamil Sangam MN.ttc",
+            "/System/Library/Fonts/Supplemental/Tamil MN.ttc",
+            "/Library/Fonts/Arial Unicode.ttf",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .collect()
+    } else {
+        unix_fonts(&[
+            "google-noto/NotoSansTamilUI-Regular.ttf",
+            "google-noto/NotoSansTamil-Regular.ttf",
+            "google-noto-vf/NotoSansTamil[wght].ttf",
+            "truetype/noto/NotoSansTamil-Regular.ttf",
+            "truetype/noto/NotoSansTamilUI-Regular.ttf",
+            "noto/NotoSansTamil-Regular.ttf",
+            "noto/NotoSansTamilUI-Regular.ttf",
+            "lohit-tamil-fonts/Lohit-Tamil.ttf",
+            "truetype/lohit-tamil/Lohit-Tamil.ttf",
+        ])
+    }
+}
+
+/// Well-known locations of faces with broad script coverage, best first. Chinese is not here:
+/// one installed Han face serves both Chinese scripts and the page renderer alike
+/// ([`chinese_fallback`]). Noto CJK and Source Han are left out on purpose (AGENTS.md §1.1).
 fn candidates() -> Vec<PathBuf> {
     if cfg!(windows) {
-        ["segoeui.ttf", "tahoma.ttf", "arial.ttf"].iter().map(|f| windows_font_dir().join("Fonts").join(f)).collect()
+        ["segoeui.ttf", "tahoma.ttf", "arial.ttf"].iter().map(|f| windows_fonts().join(f)).collect()
     } else if cfg!(target_os = "macos") {
         ["/System/Library/Fonts/SFArabic.ttf", "/System/Library/Fonts/GeezaPro.ttc", "/System/Library/Fonts/Supplemental/Arial.ttf"]
             .iter()
             .map(PathBuf::from)
             .collect()
     } else {
-        let files = [
+        unix_fonts(&[
             "truetype/noto/NotoSansArabic-Regular.ttf",
             "noto/NotoSansArabic-Regular.ttf",
             "google-noto/NotoSansArabic-Regular.ttf",
@@ -74,9 +230,47 @@ fn candidates() -> Vec<PathBuf> {
             "TTF/DejaVuSans.ttf",
             "dejavu/DejaVuSans.ttf",
             "dejavu-sans-fonts/DejaVuSans.ttf",
-        ];
-        ["/usr/share/fonts", "/usr/local/share/fonts"].iter().flat_map(|dir| files.iter().map(move |f| Path::new(dir).join(f))).collect()
+        ])
     }
+}
+
+fn windows_fonts() -> PathBuf {
+    let dir = std::env::var_os("WINDIR").or_else(|| std::env::var_os("SystemRoot")).map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+    dir.join("Fonts")
+}
+
+fn unix_fonts(files: &'static [&'static str]) -> Vec<PathBuf> {
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    static INSTALLED: OnceLock<Vec<PathBuf>> = OnceLock::new();
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    // Read once per process, and not at all when installed fonts are turned off.
+    let installed = INSTALLED
+        .get_or_init(|| {
+            if std::env::var_os("PDFCRAFT_SYSTEM_FONTS").is_some_and(|v| v == "0") {
+                return Vec::new();
+            }
+            fontconfig::font_files(&fontconfig::config_path())
+        })
+        .as_slice();
+    #[cfg(not(all(unix, not(target_os = "macos"), not(target_arch = "wasm32"))))]
+    let installed: &[PathBuf] = &[];
+    unix_candidates(files, installed)
+}
+
+fn unix_candidates(files: &[&str], installed: &[PathBuf]) -> Vec<PathBuf> {
+    let mut paths: Vec<_> =
+        ["/usr/share/fonts", "/usr/local/share/fonts"].iter().flat_map(|dir| files.iter().map(move |f| Path::new(dir).join(f))).collect();
+    // Fontconfig may point into /nix/store or a user's font directory. Keep the existing
+    // candidate names and their preference order; this does not select arbitrary fonts.
+    for file in files {
+        let name = Path::new(file).file_name();
+        for path in installed.iter().filter(|p| p.file_name() == name) {
+            if !paths.contains(path) {
+                paths.push(path.clone());
+            }
+        }
+    }
+    paths
 }
 
 fn read(path: &Path, probes: &str) -> Option<Arc<FontData>> {
@@ -95,7 +289,7 @@ fn read(path: &Path, probes: &str) -> Option<Arc<FontData>> {
     let mut data = FontData::from_owned(bytes);
     data.index = index;
     log::info!("interface font fallback: {} (face {index})", path.display());
-    Some(Arc::new(data))
+    Some(Arc::new(crate::theme::on_interface_baseline(data)))
 }
 
 /// All probes must map in the same collection face; egui parses fonts with the same skrifa, so a
@@ -109,13 +303,15 @@ fn face_with(bytes: &[u8], probes: &str) -> Option<u32> {
 mod tests {
     use super::*;
 
-    /// A Chinese face is found by `pdfcraft_fonts::han`, not by this module's Arabic list, so it is
-    /// not empty on any desktop platform — and empty in a web build.
     #[test]
-    fn arabic_candidates_are_absolute_font_files() {
-        let list = candidates();
-        assert!(!list.is_empty());
-        assert!(list.iter().all(|p| p.extension().is_some_and(|e| e == "ttf" || e == "ttc")));
+    fn configured_candidates_preserve_names_order_and_existing_paths() {
+        let names = ["noto/NotoSansArabic-Regular.ttf", "truetype/dejavu/DejaVuSans.ttf"];
+        let noto = PathBuf::from("/custom/fonts/NotoSansArabic-Regular.ttf");
+        let dejavu = PathBuf::from("/nix/store/font/share/fonts/truetype/DejaVuSans.ttf");
+        let installed = [dejavu.clone(), PathBuf::from("/custom/fonts/SourceHanSans.ttf"), noto.clone(), dejavu.clone()];
+        let mut expected = unix_candidates(&names, &[]);
+        expected.extend([noto, dejavu]);
+        assert_eq!(unix_candidates(&names, &installed), expected);
     }
 
     #[test]
@@ -133,6 +329,10 @@ mod tests {
         // Inter is Latin, Greek and Cyrillic only.
         let inter = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
         assert_eq!(face_with(inter, PROBE), None);
+        assert_eq!(face_with(inter, DEVANAGARI_PROBE), None);
+        assert_eq!(face_with(inter, TELUGU_PROBE), None);
+        assert_eq!(face_with(inter, SINHALA_PROBE), None);
+        assert_eq!(face_with(inter, TAMIL_PROBE), None);
         assert_eq!(face_with(inter, "AB"), Some(0));
     }
 
@@ -145,5 +345,32 @@ mod tests {
         let result = read(&path, PROBE);
         std::fs::remove_file(&path).expect("the temp file is removed");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn arabic_candidates_are_absolute_font_files() {
+        let list = candidates();
+        assert!(!list.is_empty());
+        assert!(list.iter().all(|p| p.extension().is_some_and(|e| e == "ttf" || e == "ttc")), "{list:?}");
+    }
+
+    #[test]
+    fn a_script_fallback_is_the_first_candidate_with_the_probe() {
+        let inter = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/fonts/Inter-Regular.ttf"));
+        let candidates = [PathBuf::from("definitely/not/here.ttf"), inter];
+        assert!(script_fallback(&candidates, "A").is_some());
+        assert!(script_fallback(&candidates, TELUGU_PROBE).is_none());
+        assert!(script_fallback(&candidates, DEVANAGARI_PROBE).is_none());
+        assert!(script_fallback(&candidates, SINHALA_PROBE).is_none());
+        assert!(script_fallback(&candidates, TAMIL_PROBE).is_none());
+    }
+
+    #[test]
+    fn script_candidates_are_absolute_font_files() {
+        for list in [devanagari_candidates(), telugu_candidates(), sinhala_candidates(), tamil_candidates()] {
+            assert!(!list.is_empty());
+            assert!(list.iter().all(|p| p.is_absolute() || cfg!(windows)), "{list:?}");
+            assert!(list.iter().all(|p| p.extension().is_some_and(|e| e == "ttf" || e == "ttc")), "{list:?}");
+        }
     }
 }
