@@ -1,10 +1,12 @@
-//! Asks GitHub for the latest PdfCraft release (Help ▸ Check for updates, issue #28).
+//! Asks GitHub for the latest PdfCraft CN release (Help ▸ Check for updates, issue #28).
 
 use std::time::Duration;
 
 use pdfcraft_ui_egui::updates::{RELEASES_PAGE, Release};
 
-const LATEST: &str = "https://api.github.com/repos/storytold/pdfcraft/releases/latest";
+/// Every CN build is a pre-release (`-cn.N`), which `/releases/latest` skips, so ask the list
+/// endpoint instead; it answers with the newest published release first.
+const LATEST: &str = "https://api.github.com/repos/misswell/PdfCraft-CN/releases?per_page=1";
 
 /// The latest release. The answer is untrusted: its size is capped, and only a page under
 /// [`RELEASES_PAGE`] is ever offered for download (anything else falls back to that list).
@@ -71,8 +73,14 @@ fn rate_limited(reset: Option<&str>, now: u64) -> String {
 
 fn parse(body: &str) -> Result<Release, String> {
     let v: serde_json::Value = serde_json::from_str(body).map_err(|e| format!("unreadable answer ({e})"))?;
-    let version = v["tag_name"].as_str().filter(|t| !t.is_empty() && t.len() <= 64).ok_or("no release found")?.to_string();
-    let url = v["html_url"]
+    // The list endpoint answers with an array, newest first; a plain release object is accepted
+    // too so the parser also works against `/releases/latest`.
+    let release = match &v {
+        serde_json::Value::Array(list) => list.first().ok_or("no release found")?,
+        other => other,
+    };
+    let version = release["tag_name"].as_str().filter(|t| !t.is_empty() && t.len() <= 64).ok_or("no release found")?.to_string();
+    let url = release["html_url"]
         .as_str()
         .filter(|u| u.strip_prefix(RELEASES_PAGE).is_some_and(|rest| rest.starts_with('/') && !rest.contains(['?', '#', '\\'])))
         .unwrap_or(RELEASES_PAGE)
@@ -86,12 +94,23 @@ mod tests {
 
     #[test]
     fn answers_are_read_and_only_our_release_pages_are_offered() {
-        let r = parse(r#"{"tag_name":"v0.2.0","html_url":"https://github.com/storytold/pdfcraft/releases/tag/v0.2.0"}"#).unwrap();
-        assert_eq!(r, Release { version: "v0.2.0".into(), url: "https://github.com/storytold/pdfcraft/releases/tag/v0.2.0".into() });
-        for elsewhere in ["https://example.com/pdfcraft.exe", "https://github.com/storytold/pdfcraft/releases.evil/x", "javascript:alert(1)"] {
+        let r = parse(r#"{"tag_name":"v0.2.0","html_url":"https://github.com/misswell/PdfCraft-CN/releases/tag/v0.2.0"}"#).unwrap();
+        assert_eq!(r, Release { version: "v0.2.0".into(), url: "https://github.com/misswell/PdfCraft-CN/releases/tag/v0.2.0".into() });
+        // The list endpoint we ask: newest first, and the first entry is the one offered.
+        let list = r#"[{"tag_name":"v0.9.0-cn.2","html_url":"https://github.com/misswell/PdfCraft-CN/releases/tag/v0.9.0-cn.2"},{"tag_name":"v0.9.0-cn.1","html_url":"https://github.com/misswell/PdfCraft-CN/releases/tag/v0.9.0-cn.1"}]"#;
+        assert_eq!(parse(list).unwrap().version, "v0.9.0-cn.2");
+        // Another repository's release page is not ours, even when it looks similar.
+        for elsewhere in [
+            "https://example.com/pdfcraft.exe",
+            "https://github.com/storytold/pdfcraft/releases/tag/v9.9.9",
+            "https://github.com/misswell/PdfCraft-CN/releases.evil/x",
+            "javascript:alert(1)",
+        ] {
             let r = parse(&format!(r#"{{"tag_name":"v9.9.9","html_url":"{elsewhere}"}}"#)).unwrap();
             assert_eq!(r.url, RELEASES_PAGE, "{elsewhere}");
         }
+        assert!(parse(r#""#).is_err());
+        assert!(parse(r#"[]"#).is_err());
         assert!(parse(r#"{"message":"Not Found"}"#).is_err());
         assert!(parse("<html>").is_err());
     }

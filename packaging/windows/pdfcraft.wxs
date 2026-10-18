@@ -36,7 +36,8 @@
     <Icon Id="PdfcraftIcon.ico" SourceFile="$(var.IconPath)" />
     <Property Id="ARPPRODUCTICON" Value="PdfcraftIcon.ico" />
     <Property Id="ARPURLINFOABOUT" Value="https://getartcraft.com/apps/pdfcraft" />
-    <Property Id="ARPURLUPDATEINFO" Value="https://getartcraft.com/apps/pdfcraft" />
+    <!-- This fork ships its own builds, so the update link in Apps & Features goes to its list. -->
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/misswell/PdfCraft-CN/releases" />
     <Property Id="ARPHELPLINK" Value="https://discord.gg/artcraft" />
     <!-- Desktop shortcut (#143): on by default for a first install, a checkbox in the full-UI
          welcome dialog, and INSTALLDESKTOPSHORTCUT=0 on the msiexec command line for unattended

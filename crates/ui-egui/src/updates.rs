@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use crate::{PdfCraftApp, theme, widgets};
 
-/// Where every PdfCraft release is listed.
-pub const RELEASES_PAGE: &str = "https://github.com/storytold/pdfcraft/releases";
+/// Where every PdfCraft CN release is listed.
+pub const RELEASES_PAGE: &str = "https://github.com/misswell/PdfCraft-CN/releases";
 
 /// The latest published release.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,23 +24,75 @@ pub struct Release {
 /// Asks for the latest release (blocking; it runs on its own thread).
 pub type UpdateSource = Arc<dyn Fn() -> Result<Release, String> + Send + Sync>;
 
-/// Whether release `latest` (a tag such as `v0.2.0`) is newer than version `current` (`0.1.1`).
-/// Pre-release and build suffixes are ignored; a version that doesn't parse is never newer.
+/// Whether release `latest` (a tag such as `v0.2.0` or `v0.9.0-cn.2`) is newer than version
+/// `current` (`0.9.0-cn.1`). Comparison follows semver: a pre-release is older than its release,
+/// and numeric pre-release identifiers compare as numbers (`-cn.10` is newer than `-cn.9`). A
+/// version that doesn't parse is never newer.
 pub fn is_newer(latest: &str, current: &str) -> bool {
     matches!((parse(latest), parse(current)), (Some(l), Some(c)) if l > c)
 }
 
-fn parse(v: &str) -> Option<(u64, u64, u64)> {
+/// One dot-separated pre-release identifier. Numeric sorts below text, as semver requires.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Identifier {
+    Numeric(u64),
+    Text(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Version {
+    core: (u64, u64, u64),
+    /// Empty for a release; `None` never appears, so `pre.is_empty()` means "this is a release".
+    pre: Vec<Identifier>,
+}
+
+impl Ord for Version {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.core.cmp(&other.core).then_with(|| match (self.pre.is_empty(), other.pre.is_empty()) {
+            (true, true) => std::cmp::Ordering::Equal,
+            (true, false) => std::cmp::Ordering::Greater,
+            (false, true) => std::cmp::Ordering::Less,
+            (false, false) => self.pre.cmp(&other.pre),
+        })
+    }
+}
+
+impl PartialOrd for Version {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn parse(v: &str) -> Option<Version> {
     let v = v.trim().trim_start_matches(['v', 'V']);
-    let core = v.split(['-', '+']).next()?;
+    // Build metadata plays no part in precedence.
+    let v = v.split('+').next()?;
+    let (core, pre) = match v.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (v, None),
+    };
     let mut parts = core.split('.');
     let mut next = |required: bool| match parts.next() {
         Some(p) => p.parse::<u64>().ok(),
         None if required => None,
         None => Some(0),
     };
-    let version = (next(true)?, next(false)?, next(false)?);
-    parts.next().is_none().then_some(version)
+    let core = (next(true)?, next(false)?, next(false)?);
+    if parts.next().is_some() {
+        return None;
+    }
+    let pre = match pre {
+        Some(p) => p
+            .split('.')
+            .map(|id| match id.parse::<u64>() {
+                Ok(n) => Some(Identifier::Numeric(n)),
+                Err(_) if !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') => Some(Identifier::Text(id.to_string())),
+                Err(_) => None,
+            })
+            .collect::<Option<Vec<_>>>()?,
+        None => Vec::new(),
+    };
+    Some(Version { core, pre })
 }
 
 /// Where a check is.
