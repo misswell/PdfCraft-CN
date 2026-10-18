@@ -43,7 +43,7 @@ pub fn replace(manifest: &str, new: &str) -> Result<String, String> {
         let t = line.trim();
         if t.starts_with('[') {
             in_deps = t == "[workspace.dependencies]";
-        } else if in_deps && t.contains("path = ") {
+        } else if in_deps && has_path_key(t) {
             out.push_str(&repin(line, new));
             continue;
         }
@@ -66,6 +66,18 @@ fn repin(line: &str, new: &str) -> String {
         return line.to_string();
     };
     format!("{}version = \"{new}\"{}", &line[..start], &tail[end + 1..])
+}
+
+/// Whether this `[workspace.dependencies]` entry declares a `path` key, rather than merely
+/// containing the text: a crate *named* `…path` (`craft-docpath = { … }`) is an ordinary external
+/// dependency, and rewriting its version breaks resolution.
+fn has_path_key(line: &str) -> bool {
+    let Some((_, table)) = line.split_once('{') else {
+        return false;
+    };
+    table
+        .split(',')
+        .any(|field| field.split_once('=').is_some_and(|(key, _)| key.trim() == "path"))
 }
 
 /// Semver without build metadata: `MAJOR.MINOR.PATCH` plus an optional `-pre.release` tag.
@@ -180,6 +192,16 @@ mod tests {
         assert_eq!(replace(m, "0.5.1-cn.1").unwrap(), want);
     }
 
+    /// Upstream added a git dependency named `craft-docpath`, which contains the text `path = `.
+    /// Only a real inline-table `path` key is an internal pin; its version must not move.
+    #[test]
+    fn a_dependency_name_ending_in_path_keeps_its_version() {
+        let m = "[workspace.package]\nversion = \"0.9.0\"\n\n[workspace.dependencies]\ncraft-docpath = { version = \"0.1.0\", git = \"https://github.com/storytold/craft-libs\" }\nin = { path = \"crates/in\", version = \"0.9.0\" }\n";
+        let out = replace(m, "0.9.0-cn.1").unwrap();
+        assert!(out.contains("craft-docpath = { version = \"0.1.0\""), "{out}");
+        assert!(out.contains("in = { path = \"crates/in\", version = \"0.9.0-cn.1\" }"), "{out}");
+    }
+
     #[test]
     fn keeps_crlf_line_endings() {
         let crlf = MANIFEST.replace('\n', "\r\n");
@@ -217,7 +239,7 @@ mod tests {
                 in_deps = t == "[workspace.dependencies]";
                 continue;
             }
-            if in_deps && t.contains("path = ") {
+            if in_deps && has_path_key(t) {
                 let pin = t.split("version = \"").nth(1).and_then(|rest| rest.split('"').next()).unwrap_or_default();
                 assert!(pin.is_empty() || pin == version, "{t}: pinned at {pin}, workspace is {version}");
             }
