@@ -75,9 +75,7 @@ fn has_path_key(line: &str) -> bool {
     let Some((_, table)) = line.split_once('{') else {
         return false;
     };
-    table
-        .split(',')
-        .any(|field| field.split_once('=').is_some_and(|(key, _)| key.trim() == "path"))
+    table.split(',').any(|field| field.split_once('=').is_some_and(|(key, _)| key.trim() == "path"))
 }
 
 /// Semver without build metadata: `MAJOR.MINOR.PATCH` plus an optional `-pre.release` tag.
