@@ -148,4 +148,6 @@ sync_github_name = false
 
 [people.sll1679339710-arch]
 display_name = "Tom Sun"
+
+[people.MortenHusted]
 sync_github_name = true
