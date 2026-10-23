@@ -78,18 +78,42 @@ if [ "$FINISH" = 1 ]; then
     || die "no release $TAG on $FORK_REPO to finish"
   echo "==> --finish: skipping the push and the pipeline wait for $TAG"
 else
-  BEFORE="$(gh api "repos/$FORK_REPO/actions/workflows/release.yml/runs?per_page=1" --jq '.workflow_runs[0].id')"
+  # A `run:` line that ends in a colon (`… -- test_name::`) is a YAML syntax error, and an
+  # unparseable release.yml fails every push it is attached to with a run that has no jobs at all.
+  # Packaging lint checks this in CI, but it is triggered by the same push as the release, so it is
+  # no protection here; catch it before pushing.
+  python3 - <<'PY' || die "a workflow file does not parse as YAML"
+import glob, sys
+try:
+    import yaml
+except ImportError:
+    print("publish: PyYAML missing; skipping the workflow syntax pre-check", file=sys.stderr)
+    sys.exit(0)
+for path in sorted(glob.glob(".github/workflows/*.yml")):
+    try:
+        yaml.safe_load(open(path))
+    except Exception as error:
+        print(f"publish: {path}: {error}", file=sys.stderr)
+        sys.exit(1)
+PY
+  SHA="$(git rev-parse cn)"
+  BEFORE="$(gh api "repos/$FORK_REPO/actions/workflows/release.yml/runs?per_page=1" --jq '.workflow_runs[0].run_number // 0')"
   git branch -f release cn
   git push --quiet "$FORK_REMOTE" release:release
 
-  echo "==> waiting for release.yml"
+  echo "==> waiting for release.yml on $SHA"
   DEADLINE=$(( $(date +%s) + CI_TIMEOUT ))
   RUN=""
-  while [ "${RUN:-}" = "" ] || [ "$RUN" = "$BEFORE" ]; do
-    [ "$(date +%s)" -lt "$DEADLINE" ] || die "no new release.yml run appeared after $BEFORE"
+  while [ "${RUN:-}" = "" ]; do
+    [ "$(date +%s)" -lt "$DEADLINE" ] || die "no release.yml run for $SHA newer than run $BEFORE appeared within ${CI_TIMEOUT}s"
     sleep 30
-    RUN="$(gh api "repos/$FORK_REPO/actions/workflows/release.yml/runs?branch=release&per_page=1" \
-      --jq '.workflow_runs[0].id // ""')"
+    # Not `?branch=release`: GitHub files a run under the branch it saw the commit on first, and the
+    # same commit is on `cn`, so this run can appear under that name. The commit and a run number
+    # above the one taken before the push are what identify it — a stale run from an earlier release
+    # otherwise looks like the new one, and the pipeline then never made this version's draft.
+    RUN="$(gh api "repos/$FORK_REPO/actions/workflows/release.yml/runs?per_page=20" \
+      --jq '.workflow_runs[] | [.id, .run_number, .head_sha] | @tsv' \
+      | awk -v sha="$SHA" -v before="$BEFORE" '$3 == sha && $2 > before { print $1; exit }')"
   done
   echo "==> https://github.com/$FORK_REPO/actions/runs/$RUN"
   while :; do
@@ -99,7 +123,11 @@ else
     sleep 60
   done
   CONCLUSION="$(gh api "repos/$FORK_REPO/actions/runs/$RUN" --jq '.conclusion')"
-  [ "$CONCLUSION" = success ] || die "run $RUN finished '$CONCLUSION'"
+  [ "$CONCLUSION" = success ] || die "run $RUN finished '$CONCLUSION' — see https://github.com/$FORK_REPO/actions/runs/$RUN"
+  # The draft is what the swap below uploads to. Find out now, not after the local macOS build.
+  gh release view "$TAG" --repo "$FORK_REPO" >/dev/null 2>&1 \
+    || die "run $RUN passed but left no release $TAG: the Draft GitHub Release job is the place to look"
+
 fi
 
 # ---- rebuild macOS here, signed and notarized ----------------------------------------------------
