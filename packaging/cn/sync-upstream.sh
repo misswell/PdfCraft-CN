@@ -84,6 +84,7 @@ if ! git merge --no-edit "$UP"; then
   # than matching the whole string.)
   unresolved=""
   for f in $(git diff --name-only --diff-filter=U); do
+    # shellcheck disable=SC2194  # the spaces are the separators: the subject is a literal on purpose
     case " Cargo.toml Cargo.lock " in
       *" $f "*) ;;
       *) unresolved="$unresolved $f" ;;
