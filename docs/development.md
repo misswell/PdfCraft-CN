@@ -167,7 +167,7 @@ prohibiting redistribution without a separate licence. Other fonts retain their 
 Published screenshots must use `PDFCRAFT_SYSTEM_FONTS=0`, as required by `AGENTS.md` §1.4.
 For regression validation with an installed Chinese font, set
 `PDFCRAFT_TEST_REQUIRE_CJK=1` and run
-`cargo test -p pdfcraft-ui-egui --test chinese_system_font -- --nocapture`.
+`cargo test -p pdfcraft-ui-egui --test it -- chinese_system_font:: -- --nocapture`.
 Without the flag the test skips when no Chinese face is installed; with it, the same run **fails**,
 which is what the macOS release job does before packaging — a build whose Chinese interface would
 show boxes cannot be shipped as a green pipeline. The Windows release job runs the same test

@@ -100,7 +100,7 @@ jobs:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           CRAFT_FONTS_REQUIRED: "1"
           PDFCRAFT_TEST_REQUIRE_CJK: "1"
-        run: cargo test --release --locked -p pdfcraft-ui-egui --test chinese_system_font
+        run: cargo test --release --locked -p pdfcraft-ui-egui --test it -- chinese_system_font::
       - name: Import signing certificate
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -172,7 +172,7 @@ jobs:
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           CRAFT_FONTS_REQUIRED: "1"
-        run: cargo test --release --locked --target ${{ matrix.target }} -p pdfcraft-ui-egui --test chinese_system_font
+        run: cargo test --release --locked --target ${{ matrix.target }} -p pdfcraft-ui-egui --test it -- chinese_system_font::
       - name: Install WiX
         shell: pwsh
         run: dotnet tool install --global wix --version 5.0.2
