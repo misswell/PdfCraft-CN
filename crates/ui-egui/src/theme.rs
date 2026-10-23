@@ -214,10 +214,8 @@ pub fn install_fonts_for(ctx: &egui::Context, cjk: CjkPreference) {
     ctx.set_fonts(installed_font_definitions(cjk));
 }
 
-/// The existing installed Arabic-script fallback, last in every interface family.
+/// The name of the installed face [`installed_font_definitions`] may add after the embedded ones.
 pub const SYSTEM_FALLBACK: &str = "system-fallback";
-/// An installed Chinese face; never part of the embedded-only definitions.
-pub const SYSTEM_CHINESE_FALLBACK: &str = "system-chinese-fallback";
 /// The name of the installed Devanagari (Hindi) face [`installed_font_definitions`] may add.
 pub const SYSTEM_DEVANAGARI_FALLBACK: &str = "system-devanagari-fallback";
 /// The name of the installed Telugu face [`installed_font_definitions`] may add.
@@ -226,59 +224,75 @@ pub const SYSTEM_TELUGU_FALLBACK: &str = "system-telugu-fallback";
 pub const SYSTEM_SINHALA_FALLBACK: &str = "system-sinhala-fallback";
 /// The name of the installed Tamil face [`installed_font_definitions`] may add.
 pub const SYSTEM_TAMIL_FALLBACK: &str = "system-tamil-fallback";
+/// The name of the installed Hebrew face [`installed_font_definitions`] may add.
+pub const SYSTEM_HEBREW_FALLBACK: &str = "system-hebrew-fallback";
+/// The name of the installed Hangul (Korean) face [`installed_font_definitions`] may add.
+pub const SYSTEM_HANGUL_FALLBACK: &str = "system-hangul-fallback";
+/// The name of the installed Han face [`installed_font_definitions`] adds outside a Chinese
+/// interface, where the general [`SYSTEM_FALLBACK`] slot draws Arabic script instead.
+pub const SYSTEM_HAN_FALLBACK: &str = "system-han-fallback";
 
-/// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, the faces
-/// already installed on this machine that draw what no embedded face can.
+/// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, one face
+/// already installed on this machine. It only draws characters no embedded face has.
 ///
-/// - One installed Han face ([`pdfcraft_fonts::han`]) serves both Chinese scripts whatever the
-///   interface language, because a Chinese file name in an English interface needs it too. In
-///   Chinese mode it goes before the Japanese craft-fonts faces — they lack hundreds of the
-///   catalog's characters (欢, 导, 签, …, #826), and one line drawn from two faces with different
-///   vertical metrics would not sit on one baseline — but after any embedded Chinese face.
-///   Otherwise it follows every embedded face.
-/// - Installed Devanagari, Telugu, Sinhala and Tamil faces, when there are, come next, so Hindi,
-///   Telugu (#1531), Sinhala and Tamil (#1688) text, such as a file name, draws in a build without
-///   such faces.
-/// - The installed Arabic-script face stays the last fallback of every family (an Arabic file name
-///   in a build without craft-fonts).
+/// - In a Chinese interface built without a `Hans` craft-fonts face (every release so far,
+///   #826), it is a Chinese system face (Microsoft YaHei, PingFang, …), placed before the
+///   Japanese craft-fonts faces: they lack hundreds of the catalog's characters (欢, 导, 签, …),
+///   and one line drawn from two faces with different vertical metrics would not sit on one
+///   baseline.
+/// - Otherwise it is the last fallback of every family (an Arabic file name in a build without
+///   craft-fonts).
+///
+/// Installed Devanagari, Telugu, Sinhala, Tamil, Hebrew and Hangul faces, when there are, end
+/// every family just before that one, so Hindi, Telugu (#1531), Sinhala and Tamil (#1688) and
+/// Korean text, such as a file name or a tab title, and Hebrew file names (#586) draw in a build
+/// without such faces. So does an installed Han face outside a Chinese interface ([`SYSTEM_HAN_FALLBACK`]),
+/// because that last slot is taken by the Arabic-script face there and a Chinese file name would
+/// otherwise draw boxes (#826).
 ///
 /// `PDFCRAFT_SYSTEM_FONTS=0` leaves them all out.
 pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
-    // Both Chinese scripts share the one installed Han face ([`pdfcraft_fonts::han`]), so they
-    // differ only in the craft-fonts ordering; only a non-Chinese interface keeps it last.
-    let prefer_hans = cjk != CjkPreference::Default;
     #[cfg_attr(target_arch = "wasm32", expect(unused_mut))]
-    let mut fonts = font_definitions_for(prefer_hans);
+    let mut fonts = font_definitions_for(cjk == CjkPreference::SimplifiedChinese);
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // One installed Han face serves both Chinese scripts, so a Chinese file name draws in an
-        // English interface too; only its place in the family moves with the interface language.
-        if let Some(data) = crate::system_fonts::chinese_fallback() {
-            fonts.font_data.insert(SYSTEM_CHINESE_FALLBACK.to_owned(), data);
-            let japanese: Vec<String> = pdfcraft_fonts::ui_japanese_fonts().iter().map(|face| face.name()).collect();
-            for stack in fonts.families.values_mut() {
-                let at = if prefer_hans { stack.iter().position(|name| japanese.contains(name)).unwrap_or(stack.len()) } else { stack.len() };
-                stack.insert(at, SYSTEM_CHINESE_FALLBACK.to_owned());
-            }
-        }
-        // Devanagari, Telugu, Sinhala and Tamil next, before the installed Arabic face, which
-        // stays the last fallback of every family.
-        for (name, data) in [
+        use crate::system_fonts::{Need, fallback};
+        let need = match cjk {
+            _ if !pdfcraft_fonts::ui_chinese_fonts().is_empty() => Need::Other,
+            CjkPreference::SimplifiedChinese => Need::Hans,
+            CjkPreference::TraditionalChinese => Need::Hant,
+            CjkPreference::Default => Need::Other,
+        };
+        let mut installed = vec![
             (SYSTEM_DEVANAGARI_FALLBACK, crate::system_fonts::devanagari_fallback()),
             (SYSTEM_TELUGU_FALLBACK, crate::system_fonts::telugu_fallback()),
             (SYSTEM_SINHALA_FALLBACK, crate::system_fonts::sinhala_fallback()),
             (SYSTEM_TAMIL_FALLBACK, crate::system_fonts::tamil_fallback()),
-        ] {
+            (SYSTEM_HEBREW_FALLBACK, crate::system_fonts::hebrew_fallback()),
+            (SYSTEM_HANGUL_FALLBACK, crate::system_fonts::hangul_fallback()),
+        ];
+        // In a Chinese interface the general slot already holds a Han face, and it goes before the
+        // Japanese ones; here the two scripts need two slots, because one family draws one line.
+        if need == Need::Other {
+            installed.push((SYSTEM_HAN_FALLBACK, fallback(Need::Hans)));
+        }
+        // Before the general installed face, which stays the last fallback outside Chinese.
+        for (name, data) in installed {
             let Some(data) = data else { continue };
             fonts.font_data.insert(name.to_owned(), data);
             for stack in fonts.families.values_mut() {
                 stack.push(name.to_owned());
             }
         }
-        if let Some(data) = crate::system_fonts::fallback() {
+        if let Some(data) = fallback(need) {
             fonts.font_data.insert(SYSTEM_FALLBACK.to_owned(), data);
+            let japanese: Vec<String> = pdfcraft_fonts::ui_japanese_fonts().iter().map(|f| f.name()).collect();
             for stack in fonts.families.values_mut() {
-                stack.push(SYSTEM_FALLBACK.to_owned());
+                let at = match need {
+                    Need::Other => None,
+                    Need::Hans | Need::Hant => stack.iter().position(|n| japanese.contains(n)),
+                };
+                stack.insert(at.unwrap_or(stack.len()), SYSTEM_FALLBACK.to_owned());
             }
         }
     }
@@ -386,13 +400,14 @@ fn font_definitions_for_platform(prefer_hans: bool, platform: FontPolicyPlatform
         }
     }
     // Arabic-script faces (file names, document titles), Telugu faces (the Telugu interface,
-    // file names), Hebrew faces (file names, text being edited) and Thai faces after the CJK ones; the
-    // ranges don't overlap.
+    // file names), Hebrew faces (file names, text being edited), Thai faces and Devanagari faces
+    // (the Hindi interface) after the CJK ones; the ranges don't overlap.
     for face in pdfcraft_fonts::ui_arabic_fonts()
         .into_iter()
         .chain(pdfcraft_fonts::ui_telugu_fonts())
         .chain(pdfcraft_fonts::ui_hebrew_fonts())
         .chain(pdfcraft_fonts::ui_thai_fonts())
+        .chain(pdfcraft_fonts::ui_devanagari_fonts())
     {
         let name = face.name();
         if !fonts.font_data.contains_key(&name) {

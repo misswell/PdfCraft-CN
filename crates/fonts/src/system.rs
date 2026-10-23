@@ -127,21 +127,6 @@ fn metrics(bytes: &[u8], index: u32) -> Option<(f32, f32)> {
     (m.ascent > 0.0 && row > 0.0 && (m.ascent + row).is_finite()).then(|| (m.ascent / em, row / em))
 }
 
-/// The `FontTweak::y_offset_factor` that puts [`han`]'s glyphs on the same baseline as the
-/// interface's primary face (the bytes of `primary`), which is what Chinese text shares a line with.
-///
-/// egui places a glyph `face ascent + (primary row height - face row height) / 2` below the top of
-/// its row, so a face whose own row is much taller than the primary's — every Chinese face is —
-/// lands above the Latin beside it, and out of the top of the row box. Shifting the glyphs down by
-/// the difference of those two expressions cancels it; the shift is visual only, so no layout moves.
-/// `0.0` when either face cannot be measured, which is the unfixed behaviour and never a worse one.
-pub fn ui_y_offset_factor(primary: &[u8]) -> f32 {
-    let (Some(han), Some(primary)) = (han().and_then(|f| metrics(&f.bytes, f.index)), metrics(primary, 0)) else {
-        return 0.0;
-    };
-    (primary.0 - han.0) + 0.5 * (han.1 - primary.1)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
