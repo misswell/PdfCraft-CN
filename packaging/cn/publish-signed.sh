@@ -146,7 +146,9 @@ done
 
 DMG="dist/release/pdfcraft-$VERSION-macos-universal.dmg"
 CLI="dist/release/pdfcraft-cli-$VERSION-macos-universal.zip"
-[ -f "$DMG" ] && [ -f "$CLI" ] || die "expected $DMG and $CLI"
+if [ ! -f "$DMG" ] || [ ! -f "$CLI" ]; then
+  die "expected $DMG and $CLI"
+fi
 spctl --assess --type install "$DMG" 2>/dev/null \
   || die "$DMG does not pass Gatekeeper"
 
