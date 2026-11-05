@@ -5,8 +5,10 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
-  schedule:
-    - cron: "17 3 * * *" # nightly fuzzing
+  # No `schedule:` on this fork: scheduled workflows run from the repository's default branch,
+  # which here is `cn`, so upstream's nightly cron would compile `cn` on GitHub's runners every
+  # night. `packaging/cn/sync-upstream.sh` runs the same gate on this Mac before it releases, and
+  # `workflow_dispatch` still starts this workflow by hand.
 
 env:
   CARGO_TERM_COLOR: always

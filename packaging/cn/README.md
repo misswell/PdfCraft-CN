@@ -47,6 +47,19 @@ The release notes are a required file rather than a template, because saying wha
 for users is a judgement call. A profile name proves nothing on its own: the script authenticates
 with `notarytool history` before it builds anything.
 
+## Deliberate edits to upstream files
+
+Three config files are not upstream's, and a sync that touches them has to be resolved by hand with
+our side kept:
+
+- `.github/workflows/ci.yml` and `.github/workflows/windows-arm64.yml` — the `schedule:` blocks are
+  removed. GitHub runs a scheduled workflow from the repository's default branch, which on this fork
+  is `cn`, so upstream's nightly cron compiled `cn` every night on GitHub's runners.
+- `.github/workflows/release.yml` — the macOS job builds on `macos-15`; `sync-upstream.sh` refuses a
+  merge that brings `macos-15-xlarge` back, because this account cannot start that runner.
+- `Cargo.toml` / `Cargo.lock` — the version line carries the `-cn.N` suffix, which
+  `cargo xtask version set` restores after every sync.
+
 ## The daily job
 
 An automation runs `sync-upstream.sh`, and only on `SYNCED` writes notes for what upstream brought

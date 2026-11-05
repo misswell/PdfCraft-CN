@@ -14,8 +14,7 @@ on:
       - "**/build.rs"
       - .github/workflows/windows-arm64.yml
       - packaging/windows/**
-  schedule:
-    - cron: "41 4 * * 1" # weekly, so drift in the runner images shows up
+  # No `schedule:` on this fork — see the note in ci.yml.
   workflow_dispatch:
 
 concurrency:
